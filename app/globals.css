@@ -1,0 +1,32 @@
+@import "tailwindcss";
+
+/* "Government Blue" style: navy as the main colour, saffron as the accent.
+   The app's components use Tailwind's "teal" names; here they are mapped to
+   navy, so the whole look can be changed in this one place. */
+@theme {
+  --color-teal-50: #eef2f9;
+  --color-teal-200: #c9d4ea;
+  --color-teal-300: #a9b8d8;
+  --color-teal-600: #2a4a85;
+  --color-teal-700: #1f3a6e;
+  --color-teal-800: #1a3160;
+  --color-teal-900: #142650;
+  --color-saffron: #f28c28;
+}
+
+/* Plain, readable font. No dark mode, to keep things simple. */
+body {
+  font-family: "Noto Sans", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+}
+
+/* Printing: one A4 page, no header or buttons, black text. */
+@media print {
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+  body {
+    background: white;
+    color: black;
+  }
+}
