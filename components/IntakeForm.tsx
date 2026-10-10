@@ -8,6 +8,7 @@ import { BLOCKS } from "@/lib/blocks";
 import { SYMPTOM_CHIPS, DURATIONS, SEVERITIES, PAST_ILLNESS, ENTERED_BY, VITALS_FIELDS, type ChipSymptom, type Vitals } from "@/lib/form";
 import { getProvider } from "@/lib/provider";
 import MicButton from "@/components/MicButton";
+import { slowAnswer } from "@/lib/slow";
 
 // Small helpers for consistent styling.
 const box = "w-full rounded border border-gray-300 bg-white px-3 py-2";
@@ -114,7 +115,7 @@ export default function IntakeForm({ defaultName, defaultPhone }: { defaultName:
           },
         }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(slowAnswer);
       if (!res.ok) throw new Error(data.error ?? "Something went wrong.");
       router.push(`/case/${data.id}`);
     } catch (err) {

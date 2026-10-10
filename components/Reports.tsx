@@ -8,6 +8,7 @@ import { prepareFile } from "@/lib/image";
 import { getProvider } from "@/lib/provider";
 import { computeFlag } from "@/lib/labs";
 import type { LabReport, LabRow, XrayReport } from "@/lib/schemas";
+import { slowAnswer } from "@/lib/slow";
 
 const FLAG_STYLE: Record<string, string> = {
   high: "bg-red-50 text-red-800 font-semibold",
@@ -50,7 +51,7 @@ export default function Reports({ id, saved }: { id: string; saved: { id: string
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "read", kind, images, provider: getProvider() }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(slowAnswer);
       if (!res.ok) throw new Error(data.error);
       if (kind === "lab") setLab(data.data);
       else setXray(data.data);
@@ -81,7 +82,7 @@ export default function Reports({ id, saved }: { id: string; saved: { id: string
       body: JSON.stringify({ action: "save", kind, data: kind === "lab" ? lab : xray }),
     });
     setBusy(false);
-    if (!res.ok) return setError((await res.json()).error ?? "Could not save.");
+    if (!res.ok) return setError((await res.json().catch(slowAnswer)).error ?? "Could not save.");
     reset(kind);
     setMessage("Saved to case ✓");
     router.refresh();

@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { Suggestions } from "@/lib/hospitals";
 import { supabaseBrowser, saveToken } from "@/lib/supabase-browser";
+import { slowAnswer } from "@/lib/slow";
 
 type Result = Suggestions & { final?: boolean; error?: string };
 
@@ -87,7 +88,7 @@ export default function HospitalPanel({ id, booked }: { id: string; booked: Book
             : { google_index: Number(choice) }),
       }),
     });
-    const d = await res.json();
+    const d = await res.json().catch(slowAnswer);
     setBusy(false);
     if (!res.ok) return setError(d.error ?? "Could not book.");
     router.refresh();

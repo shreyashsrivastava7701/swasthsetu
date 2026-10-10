@@ -6,6 +6,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import MicButton from "@/components/MicButton";
 import { getProvider } from "@/lib/provider";
+import { slowAnswer } from "@/lib/slow";
 
 type Props = {
   id: string;
@@ -66,7 +67,7 @@ export default function ReadBack({ id, language, readback, readbackEnglish, stat
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: correction, provider: getProvider() }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(slowAnswer);
       if (!res.ok) throw new Error(data.error);
       setChanges(data.changes);
       setCorrection("");

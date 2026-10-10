@@ -12,6 +12,7 @@ export type AiRequest = {
   images?: AiImage[]; // optional photos (lab report, X-ray)
   provider?: Provider; // optional override from the header switch
   model?: string; // optional exact model name (used by the backup chain)
+  deadline?: number; // time (ms) by which the answer must be in
 };
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
@@ -58,14 +59,17 @@ export async function runAi(req: AiRequest): Promise<string> {
   }
 
   // Give up after AI_TIMEOUT_SECONDS (default 60) so the page never spins forever.
+  // On Vercel a request is cut off after 60 s, so also stop at the deadline.
   const seconds = Number(process.env.AI_TIMEOUT_SECONDS || 60);
+  const limitMs = Math.min(seconds * 1000, (req.deadline ?? Infinity) - Date.now());
+  if (limitMs < 3000) throw new Error("timeout: no time left for this model");
   const model = req.model ?? modelFor(provider);
   const call = (lowThinking: boolean) =>
     ai.models.generateContent({
       model,
       contents: [{ role: "user", parts }],
       config: {
-        abortSignal: AbortSignal.timeout(seconds * 1000),
+        abortSignal: AbortSignal.timeout(limitMs),
         // Less "thinking" = much faster answers. Some models do not accept this
         // setting; then we remember that and call them without it.
         ...(lowThinking ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } } : {}),
@@ -129,6 +133,8 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // Run an AI call that must return JSON in a known shape.
 // Order tried: the chosen model, then (if AI_AUTO_FALLBACK=true or Gemini was
 // chosen) the Gemini backup chain. A busy model gets one more try after 3 s.
+// All tries together stop after AI_TOTAL_SECONDS (default 45), so the server
+// still has time to save and answer before Vercel's 60 s limit.
 export async function runAiJson<T>(
   schema: z.ZodType<T>,
   req: AiRequest
@@ -140,17 +146,26 @@ export async function runAiJson<T>(
       ? [{ provider: "gemma", model: modelFor("gemma") }, ...(fallback ? geminiChain().map((model) => ({ provider: "gemini" as const, model })) : [])]
       : geminiChain().map((model) => ({ provider: "gemini" as const, model }));
 
+  const deadline = Date.now() + Number(process.env.AI_TOTAL_SECONDS || 45) * 1000;
   const errors: string[] = [];
-  for (const step of plan) {
+  for (const [i, step] of plan.entries()) {
+    // A slow first model may use only part of the time, so the backups still
+    // get a turn. The last model may use whatever is left.
+    const left = deadline - Date.now();
+    const stepDeadline = i < plan.length - 1 ? Date.now() + left * 0.6 : deadline;
+    if (left < 5000) {
+      errors.push("Out of time.");
+      break;
+    }
     for (let attempt = 1; attempt <= 2; attempt++) {
       const started = Date.now();
       try {
-        const data = await tryJson(schema, { ...req, provider: step.provider, model: step.model });
+        const data = await tryJson(schema, { ...req, provider: step.provider, model: step.model, deadline: stepDeadline });
         console.log(`[ai] ${step.model} OK in ${Date.now() - started} ms`);
         return { data, provider: step.provider };
       } catch (err) {
         console.error(`[ai] ${step.model} failed after ${Date.now() - started} ms (try ${attempt}):`, String(err).slice(0, 200));
-        if (attempt === 1 && isBusy(err)) {
+        if (attempt === 1 && isBusy(err) && stepDeadline - Date.now() > 10000) {
           await wait(3000); // busy: wait a moment and try the same model once more
           continue;
         }
