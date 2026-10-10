@@ -1,6 +1,7 @@
 // POST /api/encounters/[id]/visit: the patient books a visit.
-// Body: { facility_id } for a hospital on SwasthSetu, or { google_index } for
-// one found on Google Maps; plus visit_at (date and time).
+// Body: { facility_id } for a hospital on SwasthSetu, { google_index } for
+// one found on Google Maps, or { custom_name } for a hospital the patient
+// typed in; plus visit_at (date and time).
 // Saves the referral (the hospital sees it at once), adds one anonymous row to
 // the district dashboard, and marks the case as referred.
 import { supabase } from "@/lib/supabase";
@@ -28,6 +29,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const option = saved?.mode === "registered" ? saved.options.find((o) => o.facility_id === body.facility_id) : undefined;
     if (!facilities.some((f) => f.id === body.facility_id)) return Response.json({ error: "Hospital not found." }, { status: 400 });
     packet = buildPacket(e, reports, facilities, null, body.facility_id, { reason: option?.reason, visit_at: visitAt.toISOString() });
+  } else if (typeof body.custom_name === "string") {
+    const name = body.custom_name.trim().slice(0, 120);
+    if (name.length < 3) return Response.json({ error: "Type the hospital's name." }, { status: 400 });
+    packet = buildPacket(e, reports, facilities, null, null, {
+      reason: "Chosen by the patient.",
+      hospital: { name, address: "", url: null },
+      visit_at: visitAt.toISOString(),
+    });
   } else {
     const option = saved?.mode === "google" ? saved.options[Number(body.google_index)] : undefined;
     if (!option) return Response.json({ error: "Choose a hospital first." }, { status: 400 });

@@ -39,13 +39,20 @@ const where = (km: number) => (km < 1 ? "in your block" : `${Math.round(km * 10)
 const needsText = (needed: string[]) => needed.map((c) => (CAPABILITY_LABELS[c] ?? c).split(" / ")[0]).join(", ");
 
 // Ask Gemini with a Google tool. Returns the text answer and any place links.
-async function askWithGoogle(input: string, tool: Record<string, unknown>) {
-  const seconds = Number(process.env.AI_TIMEOUT_SECONDS || 60);
+// Stops at the deadline (a time in ms), so the server always answers before
+// the host (Vercel) cuts the request off.
+async function askWithGoogle(input: string, tool: Record<string, unknown>, deadline: number) {
+  const perModel = Number(process.env.AI_TIMEOUT_SECONDS || 60) * 1000;
   const errors: string[] = [];
   for (const model of geminiChain()) {
+    const left = deadline - Date.now();
+    if (left < 5000) {
+      errors.push("out of time");
+      break;
+    }
     try {
       const call = ai.interactions.create({ model, input, tools: [tool] } as Parameters<typeof ai.interactions.create>[0]);
-      const timeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timed out")), seconds * 1000));
+      const timeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timed out")), Math.min(perModel, left)));
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const result: any = await Promise.race([call, timeout]);
       const links: { name: string; url: string }[] = [];
@@ -93,7 +100,21 @@ export function rankRegistered(facilities: Facility[], blockName: string, needed
     .slice(0, 5);
 }
 
-export async function suggestHospitals(c: CaseInfo, facilities: Facility[]): Promise<Suggestions> {
+const NO_HOSPITAL_NOTE =
+  "No hospital near you is on SwasthSetu yet. Go to your nearest government hospital and carry your summary. You can type its name below to book.";
+
+// Instant answer with no AI: registered hospitals by needs and distance, or a
+// note when none are registered. The page shows this first, so the patient can
+// always book even if Google is slow or down.
+export function quickSuggestions(c: CaseInfo, facilities: Facility[]): Suggestions {
+  const ranked = rankRegistered(facilities, c.block, c.needed);
+  if (ranked.length > 0) return { mode: "registered", source: "rules", options: ranked, note: null };
+  return { mode: "none", options: [], note: NO_HOSPITAL_NOTE };
+}
+
+// The full answer with Google. budgetMs is the most time it may take.
+export async function suggestHospitals(c: CaseInfo, facilities: Facility[], budgetMs = 45000): Promise<Suggestions> {
+  const deadline = Date.now() + budgetMs;
   const caseText = `Patient: ${c.age ?? "?"} years, ${c.sex ?? "?"}, from ${c.block} block, Hamirpur district, Himachal Pradesh, India. Problem: ${c.complaint}. Urgency: ${c.urgency}. Needs: ${needsText(c.needed)}.`;
 
   // 1. Registered hospitals.
@@ -105,7 +126,8 @@ export async function suggestHospitals(c: CaseInfo, facilities: Facility[]): Pro
         .join("\n");
       const { text } = await askWithGoogle(
         `${caseText}\n\nThese hospitals are registered on our app:\n${list}\n\nUse Google Search to check what each hospital offers and how good it is for this problem. Rank ONLY these hospitals, best for this patient first. Do not add any other hospital. Return only JSON: {"ranking": [{"id": "...", "reason": "one short plain-English sentence for the patient"}]}`,
-        { type: "google_search" }
+        { type: "google_search" },
+        deadline
       );
       const parsed = extractJson(text) as { ranking?: { id: string; reason: string }[] };
       const order = (parsed.ranking ?? []).filter((x) => ranked.some((r) => r.facility_id === x.id));
@@ -129,7 +151,8 @@ export async function suggestHospitals(c: CaseInfo, facilities: Facility[]): Pro
   try {
     const { text, links } = await askWithGoogle(
       `${caseText}\n\nFind up to 3 hospitals near this patient that can best handle this problem. Return only JSON: {"hospitals": [{"name": "...", "address": "...", "reason": "one short plain-English sentence for the patient"}]}`,
-      { type: "google_maps", latitude: block?.lat, longitude: block?.lng }
+      { type: "google_maps", latitude: block?.lat, longitude: block?.lng },
+      deadline
     );
     const parsed = extractJson(text) as { hospitals?: { name: string; address?: string; reason?: string }[] };
     const options = (parsed.hospitals ?? []).slice(0, 3).map((h) => ({
@@ -139,14 +162,14 @@ export async function suggestHospitals(c: CaseInfo, facilities: Facility[]): Pro
       url: links.find((l) => l.name && (h.name.includes(l.name) || l.name.includes(h.name)))?.url ?? null,
     }));
     if (options.length) {
-      return { mode: "google", options, note: "No hospital near you is on SwasthSetu yet. These were found on Google Maps." };
+      return {
+        mode: "google",
+        options,
+        note: "No hospital near you is on SwasthSetu yet. These were found on Google Maps. Carry your summary report.",
+      };
     }
   } catch (err) {
     console.log(`[hospitals] Google Maps search failed: ${errorText(err)}`);
   }
-  return {
-    mode: "none",
-    options: [],
-    note: "Could not find a hospital right now. Please go to your nearest government hospital and carry your summary.",
-  };
+  return { mode: "none", options: [], note: NO_HOSPITAL_NOTE };
 }
