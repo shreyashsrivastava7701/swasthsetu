@@ -1,7 +1,7 @@
 // POST /api/encounters/[id]/visit: the patient books a visit.
 // Body: { facility_id } for a hospital on SwasthSetu, { google_index } for
 // one found on Google Maps, or { custom_name } for a hospital the patient
-// typed in; plus visit_at (date and time).
+// typed in or picked from the nearby list (with custom_address, custom_url); plus visit_at (date and time).
 // Saves the referral (the hospital sees it at once), adds one anonymous row to
 // the district dashboard, and marks the case as referred.
 import { supabase } from "@/lib/supabase";
@@ -32,9 +32,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   } else if (typeof body.custom_name === "string") {
     const name = body.custom_name.trim().slice(0, 120);
     if (name.length < 3) return Response.json({ error: "Type the hospital's name." }, { status: 400 });
+    // From the "hospitals near you" list: keep its address and map link.
+    const address = typeof body.custom_address === "string" ? body.custom_address.trim().slice(0, 200) : "";
+    const mapUrl = typeof body.custom_url === "string" && /^https:\/\/(www\.google\.com\/maps|maps\.google\.com|maps\.app\.goo\.gl)\//.test(body.custom_url) ? body.custom_url : null;
     packet = buildPacket(e, reports, facilities, null, null, {
-      reason: "Chosen by the patient.",
-      hospital: { name, address: "", url: null },
+      reason: mapUrl ? "Chosen by the patient from hospitals near their block." : "Chosen by the patient.",
+      hospital: { name, address, url: mapUrl },
       visit_at: visitAt.toISOString(),
     });
   } else {

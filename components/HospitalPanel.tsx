@@ -5,10 +5,18 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { Suggestions } from "@/lib/hospitals";
+import type { NearbyOption } from "@/lib/nearby";
 import { supabaseBrowser, saveToken } from "@/lib/supabase-browser";
 import { slowAnswer } from "@/lib/slow";
 
 type Result = Suggestions & { final?: boolean; error?: string };
+type Near = { nearby?: NearbyOption[]; nearby_problem?: string | null; block?: string; error?: string };
+
+// "Civil Hospital, Nadaun" and "Civil Hospital Nadaun" count as the same place.
+const same = (a: string, b: string) => {
+  const k = (x: string) => x.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return k(a) === k(b) || k(a).includes(k(b)) || k(b).includes(k(a));
+};
 
 export type Booked = { hospital: string; visit_at: string | null; status: string; onApp: boolean };
 
@@ -24,7 +32,8 @@ function nowLocal(): string {
 
 export default function HospitalPanel({ id, booked }: { id: string; booked: Booked | null }) {
   const router = useRouter();
-  const [data, setData] = useState<Suggestions | null>(null);
+  const [data, setData] = useState<Result | null>(null);
+  const [near, setNear] = useState<Near | null>(null); // hospitals near the block, from the map
   const [checking, setChecking] = useState(false); // Google is still looking
   const [choice, setChoice] = useState("");
   const [otherName, setOtherName] = useState("");
@@ -50,7 +59,9 @@ export default function HospitalPanel({ id, booked }: { id: string; booked: Book
       });
     const show = (d: Result) => {
       setData(d);
-      if (!touched.current) setChoice(d.options?.length ? (d.mode === "registered" ? d.options[0].facility_id : "0") : d.mode === "none" ? "other" : "");
+      if (touched.current) return;
+      if (d.options?.length) setChoice(d.mode === "registered" ? d.options[0].facility_id : "0");
+      else setChoice(d.mode === "none" ? "other" : "");
     };
 
     get(refresh ? "?quick=1&refresh=1" : "?quick=1")
@@ -71,17 +82,42 @@ export default function HospitalPanel({ id, booked }: { id: string; booked: Book
     };
   }, [id, booked, refresh]);
 
+  // The map list loads on its own, so a slow map server never holds up the list above.
+  useEffect(() => {
+    if (booked) return;
+    let alive = true;
+    fetch(`/api/encounters/${id}/hospitals?nearby=1`)
+      .then((r) => r.json())
+      .catch(() => ({ nearby: [], nearby_problem: "Could not reach the server." }))
+      .then((d: Near) => {
+        if (!alive) return;
+        setNear(d);
+        // Nothing better chosen yet (no SwasthSetu or Google option): pick the nearest one on the map.
+        if (!touched.current && d.nearby?.length) setChoice((c) => (c === "" || c === "other" ? "n0" : c));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [id, booked, refresh]);
+
+  // Map results, without the hospitals already in the SwasthSetu list above.
+  const nearby = (near?.nearby ?? []).filter((n) => !(data?.mode === "registered" && data.options.some((o) => same(o.name, n.name))));
+
+
   async function book() {
     setError("");
     if (!visitAt) return setError("Choose the date and time of your visit. / आने की तारीख और समय चुनें।");
     if (choice === "other" && otherName.trim().length < 3) return setError("Type the hospital's name. / अस्पताल का नाम लिखें।");
+    const picked = choice.startsWith("n") ? nearby[Number(choice.slice(1))] : undefined;
     setBusy(true);
     const res = await fetch(`/api/encounters/${id}/visit`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         visit_at: new Date(visitAt).toISOString(),
-        ...(choice === "other"
+        ...(picked
+          ? { custom_name: picked.name, custom_address: picked.address, custom_url: picked.url }
+          : choice === "other"
           ? { custom_name: otherName }
           : data?.mode === "registered"
             ? { facility_id: choice }
@@ -163,8 +199,8 @@ export default function HospitalPanel({ id, booked }: { id: string; booked: Book
       <h2 className="font-semibold">Choose a hospital / अस्पताल चुनें</h2>
       {data.mode === "registered" && (
         <p className="mt-1 text-xs text-gray-500">
-          {data.source === "google" ? "Ranked with Google Search for your problem." : "Ranked by what you need and distance."} Only hospitals on SwasthSetu
-          are shown, so they get your summary straight away.
+          {data.source === "google" ? "Ranked with Google Search for your problem." : "Ranked by what you need and distance."} These hospitals are on
+          SwasthSetu, so they get your summary straight away.
         </p>
       )}
       {checking && (
@@ -218,6 +254,53 @@ export default function HospitalPanel({ id, booked }: { id: string; booked: Book
               </div>
             </label>
           ))}
+        {!near && (
+          <p className="pt-2 text-sm text-gray-500">Looking for more hospitals near you on the map... / नक्शे पर पास के अस्पताल खोजे जा रहे हैं...</p>
+        )}
+        {nearby.length > 0 && (
+          <p className="pt-2 text-sm font-semibold text-gray-700">
+            {data.mode === "none" ? "Hospitals near you" : "Other hospitals near you (not on SwasthSetu yet)"} / आपके पास के अस्पताल
+          </p>
+        )}
+        {nearby.map((o, i) => (
+          <label
+            key={`n${i}`}
+            className={`block cursor-pointer rounded-lg border p-3 ${choice === `n${i}` ? "border-teal-700 bg-teal-50" : "border-gray-200"}`}
+          >
+            <div className="flex items-start gap-3">
+              <input type="radio" name="hospital" checked={choice === `n${i}`} onChange={() => { touched.current = true; setChoice(`n${i}`); }} className="mt-1" />
+              <div>
+                <p className="font-semibold">
+                  {o.name} {i === 0 && <span className="ml-1 rounded bg-gray-600 px-2 py-0.5 text-xs text-white">Nearest</span>}
+                </p>
+                <p className="text-sm text-gray-600">
+                  {o.distance_km < 1 ? "Less than 1 km" : `About ${o.distance_km} km`} from your block centre
+                  {o.phone ? ` · 📞 ${o.phone}` : ""}
+                </p>
+                {o.address && <p className="text-sm text-gray-600">{o.address}</p>}
+                <a href={o.url} target="_blank" rel="noreferrer" className="text-sm text-teal-800 underline">
+                  Open in Google Maps
+                </a>
+              </div>
+            </div>
+          </label>
+        ))}
+        {nearby.length > 0 && (
+          <p className="text-xs text-gray-500">Found on OpenStreetMap. Not on SwasthSetu, so carry your summary report.</p>
+        )}
+        {near && !nearby.length && near.block && (
+          <p className="pt-1 text-sm">
+            <a
+              href={`https://www.google.com/maps/search/${encodeURIComponent(`hospitals near ${near.block}, Hamirpur, Himachal Pradesh`)}`}
+              target="_blank"
+              rel="noreferrer"
+              className="text-teal-800 underline"
+            >
+              🗺 See more hospitals near {near.block} on Google Maps
+            </a>
+            {near.nearby_problem && <span className="block text-xs text-gray-400">Nearby list not loaded: {near.nearby_problem}</span>}
+          </p>
+        )}
         {data.mode !== "registered" && (
           <label className={`block cursor-pointer rounded-lg border p-3 ${choice === "other" ? "border-teal-700 bg-teal-50" : "border-gray-200"}`}>
             <div className="flex items-start gap-3">
@@ -257,7 +340,7 @@ export default function HospitalPanel({ id, booked }: { id: string; booked: Book
         <Link href={`/case/${id}/summary`} className="text-teal-800 underline">
           📄 Summary report (PDF)
         </Link>
-        <button type="button" onClick={() => { touched.current = false; setData(null); setRefresh((n) => n + 1); }} className="text-gray-600 underline">
+        <button type="button" onClick={() => { touched.current = false; setData(null); setNear(null); setRefresh((n) => n + 1); }} className="text-gray-600 underline">
           Search again
         </button>
       </div>

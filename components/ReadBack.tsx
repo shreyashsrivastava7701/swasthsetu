@@ -35,6 +35,10 @@ export default function ReadBack({ id, language, readback, readbackEnglish, stat
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [voiceNote, setVoiceNote] = useState("");
+  // Set as soon as the server saves "Yes", so the buttons go away at once
+  // instead of waiting for the page to reload.
+  const [confirmed, setConfirmed] = useState(false);
+  const done = confirmed || status !== "draft";
 
   // Read the text aloud with the browser's own voice.
   function speak(text: string, lang: "hi" | "en") {
@@ -50,12 +54,20 @@ export default function ReadBack({ id, language, readback, readbackEnglish, stat
   }
 
   async function confirm() {
+    if (busy || done) return; // ignore a second tap
     setBusy(true);
     setError("");
-    const res = await fetch(`/api/encounters/${id}/confirm-patient`, { method: "POST" });
-    setBusy(false);
-    if (!res.ok) return setError("Could not save. Try again.");
-    router.refresh();
+    try {
+      const res = await fetch(`/api/encounters/${id}/confirm-patient`, { method: "POST" });
+      if (!res.ok) throw new Error();
+      setConfirmed(true);
+      window.dispatchEvent(new CustomEvent("ss-tab", { detail: 1 })); // move on to 2 · Reports
+      router.refresh();
+    } catch {
+      setError("Could not save. Try again.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function sendCorrection() {
@@ -86,9 +98,11 @@ export default function ReadBack({ id, language, readback, readbackEnglish, stat
       <div className="rounded border border-amber-300 bg-amber-50 p-4 text-amber-900">
         <p>Read-back skipped because the AI was unavailable. Check the note with the patient yourself.</p>
         <p className="mt-1">AI उपलब्ध नहीं था, इसलिए रीड-बैक नहीं बना। नोट मरीज़ के साथ खुद जाँचें।</p>
-        {status === "draft" && (
+        {done ? (
+          <p className="mt-3 font-medium text-green-800">✓ मरीज़ ने पुष्टि की / Patient confirmed the note.</p>
+        ) : (
           <button onClick={confirm} disabled={busy} className="mt-3 rounded bg-teal-700 px-5 py-3 font-medium text-white disabled:opacity-50">
-            मरीज़ सहमत है / Patient agrees with the note
+            {busy ? "सेव हो रहा है... / Saving..." : "मरीज़ सहमत है / Patient agrees with the note"}
           </button>
         )}
       </div>
@@ -134,16 +148,25 @@ export default function ReadBack({ id, language, readback, readbackEnglish, stat
         </div>
       )}
 
-      {status !== "draft" ? (
-        <p className="mt-4 rounded border border-green-300 bg-green-50 p-3 font-medium text-green-800">
-          ✓ मरीज़ ने पुष्टि की / Patient confirmed the summary{rounds > 0 ? ` after ${rounds} correction${rounds > 1 ? "s" : ""}` : ""}.
-        </p>
+      {done ? (
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded border border-green-300 bg-green-50 p-3">
+          <p className="font-medium text-green-800">
+            ✓ मरीज़ ने पुष्टि की / Patient confirmed the summary{rounds > 0 ? ` after ${rounds} correction${rounds > 1 ? "s" : ""}` : ""}.
+          </p>
+          <button
+            type="button"
+            onClick={() => window.dispatchEvent(new CustomEvent("ss-tab", { detail: 1 }))}
+            className="rounded bg-teal-700 px-4 py-2 font-medium text-white"
+          >
+            आगे / Next: Reports →
+          </button>
+        </div>
       ) : mode === "ask" ? (
         <div className="mt-4">
           <p className="mb-2 font-medium">{t.q}</p>
           <div className="flex gap-3">
             <button onClick={confirm} disabled={busy} className="flex-1 rounded bg-green-700 px-4 py-4 text-lg font-semibold text-white disabled:opacity-50">
-              {t.yes}
+              {busy ? "सेव हो रहा है... / Saving..." : t.yes}
             </button>
             <button onClick={() => setMode("correct")} disabled={busy} className="flex-1 rounded bg-amber-600 px-4 py-4 text-lg font-semibold text-white disabled:opacity-50">
               {t.no}

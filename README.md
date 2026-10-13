@@ -96,6 +96,7 @@ You need Node.js 20 or later, a Supabase project and a Google AI Studio API key.
    AI_AUTO_FALLBACK=true
    ```
    You can also set `GEMINI_BACKUP_MODELS` (a comma-separated list of models) and `AI_TIMEOUT_SECONDS` (60 if not set).
+   Hospitals near the patient's block come from OpenStreetMap, which is free and needs no key. (`GOOGLE_MAPS_API_KEY` is optional and not used by the team.)
 4. Start the app:
    ```bash
    npm run dev

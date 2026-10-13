@@ -3,15 +3,18 @@
 //   (nothing)  the full list checked with Google. Saved on the case, so
 //              opening the tab again is instant.
 //   ?refresh=1 ask Google again.
+//   ?nearby=1  real hospitals near the block from OpenStreetMap, including ones
+//              not on SwasthSetu (lib/nearby.ts). Asked separately, so a slow
+//              map server never holds up the main list.
 // Always answers with JSON, even if something fails.
 import { supabase } from "@/lib/supabase";
 import { getMe, caseAccess, notAllowed } from "@/lib/auth";
 import { loadCase, buildPacket } from "@/lib/packet";
 import { suggestHospitals, quickSuggestions, type CaseInfo } from "@/lib/hospitals";
 import { errorText } from "@/lib/ai";
+import { findNearby } from "@/lib/nearby";
 
 export const maxDuration = 60;
-export const dynamic = "force-dynamic";
 
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -23,6 +26,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     const soap = (e.soap ?? {}) as Record<string, unknown>;
     const url = new URL(request.url);
     const refresh = url.searchParams.get("refresh") === "1";
+    if (url.searchParams.get("nearby") === "1") {
+      const n = await findNearby(e.block); // never throws
+      return Response.json({ block: e.block, nearby: n.options, nearby_problem: n.problem });
+    }
     if (soap.hospital_suggestions && !refresh) return Response.json({ ...soap.hospital_suggestions, final: true });
 
     // What this case needs (from the rules), without any name or phone.
@@ -37,7 +44,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     };
     const open = facilities.filter((f) => f.doctor_today);
 
-    if (url.searchParams.get("quick") === "1") return Response.json({ ...quickSuggestions(info, open), final: false });
+    if (url.searchParams.get("quick") === "1") {
+      const quick = quickSuggestions(info, open);
+      return Response.json({ ...quick, final: false });
+    }
 
     let suggestions;
     try {

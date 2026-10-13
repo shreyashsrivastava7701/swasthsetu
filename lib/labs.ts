@@ -32,3 +32,20 @@ export function withFlags(rows: LabRow[]): LabRow[] {
 export function hasOutOfRange(rows: LabRow[]): boolean {
   return rows.some((r) => r.flag === "low" || r.flag === "high");
 }
+
+// The normal range as numbers, for drawing the range bar on the summary.
+// A missing end (for "< 5.7" or "> 40") is null. Null if the range can't be read.
+export function parseRange(ref: string): { low: number | null; high: number | null } | null {
+  const range = ref.replace(/,/g, "").trim();
+  const between = range.match(/^(-?\d+(?:\.\d+)?)\s*(?:-|–|to)\s*(-?\d+(?:\.\d+)?)/i);
+  if (between) return { low: Number(between[1]), high: Number(between[2]) };
+  const less = range.match(/^(?:<|<=|up to|upto)\s*(-?\d+(?:\.\d+)?)/i);
+  if (less) return { low: 0, high: Number(less[1]) };
+  const more = range.match(/^(?:>|>=)\s*(-?\d+(?:\.\d+)?)/);
+  if (more) return { low: Number(more[1]), high: null };
+  return null;
+}
+
+export function labNumber(value: string): number | null {
+  return toNumber(value);
+}
